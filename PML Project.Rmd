@@ -1,0 +1,204 @@
+---
+title: "Can we categorise exercise performance?"
+author: "Stewart, Jason"
+date: "July 29, 2016"
+output: html_document
+---
+
+```{r, echo=FALSE, include=FALSE}
+require(e1071); require(caret)
+require(AppliedPredictiveModeling)
+require(knitr)
+
+```
+```{r,echo=FALSE, include=FALSE}
+pml_training <- read.csv("pml-training.csv", header=TRUE)
+pml_testing <- read.csv("pml-testing.csv",header=TRUE)
+set.seed(12345)
+```
+
+##Summary
+The aim of this document is to see if we can quantify how well a participant is performing an exercise, in this study barbell lifts. This is done by analysing patterns in data from participants doing the exercise to varying degrees of success. 
+Using modelling techniques and accelerometer data from appropriately positioned devices we can do this successfully.
+
+##Data transformation
+In order to model this data I would first like to transform the data and reduce the number of predictors and reduce the noise. To do this I have decided to use pricipal components to make new variables that capture 90% of the variance.
+
+*Please note, all code used to create these results is in the appendix.*
+
+```{r, echo = FALSE,include=FALSE}
+
+pml_train2 <- pml_training[pml_training$new_window == 'yes',]
+
+
+pml_train2$classe <- as.factor(pml_train2$classe)
+
+pml_train3 <- subset(pml_train2, select= c(classe,user_name,X,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window
+                                            ,roll_belt,pitch_belt,yaw_belt,gyros_belt_x,gyros_belt_y,gyros_belt_z,accel_belt_x,accel_belt_y,accel_belt_z,magnet_belt_x,magnet_belt_y,magnet_belt_z
+                                            ,roll_arm,pitch_arm,yaw_arm, gyros_arm_x,gyros_arm_y,gyros_arm_z,accel_arm_x,accel_arm_y,accel_arm_z,magnet_arm_x,magnet_arm_y,magnet_arm_z
+                                            , roll_dumbbell,pitch_dumbbell,yaw_dumbbell, gyros_dumbbell_x,gyros_dumbbell_y,gyros_dumbbell_z,accel_dumbbell_x,accel_dumbbell_y,accel_dumbbell_z,magnet_dumbbell_x,magnet_dumbbell_y,magnet_dumbbell_z
+                                            , roll_forearm,pitch_forearm,yaw_forearm, gyros_forearm_x,gyros_forearm_y,gyros_forearm_z,accel_forearm_x,accel_forearm_y,accel_forearm_z,magnet_forearm_x,magnet_forearm_y,magnet_forearm_z
+)
+)
+
+pml_train4 <- pml_train3[,-c(2:8)]
+#Create principle components
+PCA_Base <- subset(pml_train4, select= -c(classe))
+PCA <- preProcess(PCA_Base,method="pca",thresh = 0.9)
+trainingPCA <- predict(PCA,pml_train4)
+```
+
+The principal components needed 13 components to capture 90 percent of the variance.
+
+## Building the model
+Our target variable is a categorical one, decision trees and random forests perform well with this type of target so I have opted to use a random forest algorithm.
+
+Feeding in these these principal component variables I will try and predict the 'classe' of the exercise. This ranges from A to E where each was a barbell curl performed to a different degree of accuracy.
+
+
+```{r, echo = FALSE, include=FALSE}
+random_forest <- train(classe ~ . ,method="rf", data=trainingPCA)
+```
+
+As you can see, the model performs well with a misclassification rate of 28.82% though it appears to be struggling to distinguish some classe A and classe B cases.
+
+```{r,echo=TRUE}
+random_forest$finalModel
+```
+
+To enhance the model I have created a generalised boosting model and combined it with the original model.
+I have done this by generating the results from both and creating a new model from these results.
+
+```{r, echo = FALSE, include=FALSE}
+gbm_mod <- train(classe~.,method="gbm",data=trainingPCA)
+
+rf_predict <- predict(random_forest,trainingPCA)
+gbm_predict <- predict(gbm_mod,trainingPCA)
+
+combo_data <- data.frame(rf_predict,gbm_predict, classe=trainingPCA$classe)
+combo_mod <- train(classe~., method="rf", data=combo_data)
+```
+
+Looking at the final results table we can see the combination model fits the data perfectly, however there is a risk of overfitting.
+
+```{r,echo=TRUE}
+combo_mod$finalModel
+```
+
+To assess this I shal perform some validation:
+```{r,echo=FALSE, include=FALSE}
+combo_predict <- predict(combo_mod,combo_data)
+combo_data2 <- data.frame(combo_data,combo_predict)
+
+#Cross Validate
+CrossValid <- rfcv(trainingPCA, combo_predict, cv.fold=20)
+```
+
+```{r,echo=TRUE}
+with(CrossValid, plot(n.var, error.cv, log="x", type="o", lwd=2))
+```
+
+Over 20 folds the error margains remain very low.
+
+## Test results
+I have been provided a 20 case test set, using this I will now assess my models predictability.
+To do this I have created the same principal components and then ran all 3 model processes over the data.
+```{r, echo=FALSE, include=FALSE}
+
+testing_PCA <- predict(PCA,pml_testing)
+testing_PCA2 <- testing_PCA[,-c(1:111)]
+rf_predict <- predict(random_forest,testing_PCA2)
+gbm_predict <- predict(gbm_mod,testing_PCA2)
+
+combo_data_test <- data.frame(rf_predict,gbm_predict)
+
+test_restults <- predict(combo_mod,combo_data_test)
+```
+
+This predicted 18 out of 20 of the test cases successfully.
+
+## Conclusion
+I can thus conclude that it is possible to predict how good an exercise has been performed, though my model was slightly overfitted.
+
+
+#Appendix
+
+```{r, echo=TRUE, eval=FALSE}
+#Download data
+
+pml_training <- read.csv("pml-training.csv", header=TRUE)
+pml_testing <- read.csv("pml-testing.csv",header=TRUE)
+
+
+#Clean data
+
+library(e1071)
+library(caret)
+library(AppliedPredictiveModeling)
+set.seed(12345)
+
+#Take the records we are interested in.
+
+pml_train2 <- pml_training[pml_training$new_window == 'yes',]
+
+pml_train2$classe <- as.factor(pml_train2$classe)
+
+pml_train3 <- subset(pml_train2, select= c(classe,user_name,X,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window
+                                            ,roll_belt,pitch_belt,yaw_belt,gyros_belt_x,gyros_belt_y,gyros_belt_z,accel_belt_x,accel_belt_y,accel_belt_z,magnet_belt_x,magnet_belt_y,magnet_belt_z
+                                            ,roll_arm,pitch_arm,yaw_arm, gyros_arm_x,gyros_arm_y,gyros_arm_z,accel_arm_x,accel_arm_y,accel_arm_z,magnet_arm_x,magnet_arm_y,magnet_arm_z
+                                            , roll_dumbbell,pitch_dumbbell,yaw_dumbbell, gyros_dumbbell_x,gyros_dumbbell_y,gyros_dumbbell_z,accel_dumbbell_x,accel_dumbbell_y,accel_dumbbell_z,magnet_dumbbell_x,magnet_dumbbell_y,magnet_dumbbell_z
+                                            , roll_forearm,pitch_forearm,yaw_forearm, gyros_forearm_x,gyros_forearm_y,gyros_forearm_z,accel_forearm_x,accel_forearm_y,accel_forearm_z,magnet_forearm_x,magnet_forearm_y,magnet_forearm_z
+)
+)
+
+pml_train4 <- pml_train3[,-c(2:8)]
+
+#Create principle components
+PCA_Base <- subset(pml_train4, select= -c(classe))
+PCA <- preProcess(PCA_Base,method="pca",thresh = 0.9)
+
+trainingPCA <- predict(PCA,pml_train4)
+
+
+#Create models
+random_forest <- train(classe ~ . ,method="rf", data=trainingPCA)
+print(random_forest)
+random_forest$finalModel
+
+#There is an error rate of 29.31% in the train set.
+#To increase the accuracy of the random forest I will add a gradient boosting model and combine them.
+
+gbm_mod <- train(classe~.,method="gbm",data=trainingPCA)
+
+rf_predict <- predict(random_forest,trainingPCA)
+gbm_predict <- predict(gbm_mod,trainingPCA)
+
+#Combine models
+
+combo_data <- data.frame(rf_predict,gbm_predict, classe=trainingPCA$classe)
+combo_mod <- train(classe~., method="rf", data=combo_data)
+
+print(combo_mod)
+combo_mod$finalModel
+varImp(combo_mod)
+
+#The gmb model is more important and contributing the most to the combination
+
+combo_predict <- predict(combo_mod,combo_data)
+combo_data2 <- data.frame(combo_data,combo_predict)
+
+#Cross Validate
+CrossValid <- rfcv(trainingPCA, combo_predict, cv.fold=20)
+with(CrossValid, plot(n.var, error.cv, log="x", type="o", lwd=2))
+
+#Test on test data
+testing_PCA <- predict(PCA,pml_testing)
+testing_PCA2 <- testing_PCA[,-c(1:111)]
+#testing_PCA2 <- pml_testing
+rf_predict <- predict(random_forest,testing_PCA2)
+gbm_predict <- predict(gbm_mod,testing_PCA2)
+
+combo_data_test <- data.frame(rf_predict,gbm_predict)
+
+test_restults <- predict(combo_mod,combo_data_test)
+```
